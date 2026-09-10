@@ -1,5 +1,5 @@
 /* =====================================================================
-   RAYLIB 2D TUTORIAL - STEPS 1-4
+   RAYLIB 2D TUTORIAL - STEPS 1-5
    =====================================================================
    Each step is its own Init/Update/Draw function, with teaching
    comments living inside the function they explain. main() stays a
@@ -9,19 +9,27 @@
      STEP 2: Drawing shapes & text              -> DrawReferenceShapes
      STEP 3: Keyboard input & movement           -> UpdatePlayer
      STEP 4: Loading & drawing a real sprite     -> InitPlayer / DrawPlayer
+     STEP 5: Animating the sprite                -> UpdatePlayer / DrawPlayer
 
    Read main() first to see the overall shape of the program, then read
    each function below it for the details.
    ===================================================================== */
 
 #include "raylib.h"
+#include <stdbool.h>
 
 /* The spritesheet is a 4x4 grid: 4 columns of frames, 4 rows (one row
    per facing direction in a typical character sheet like this one). We
-   only use the very first frame (row 0, column 0) in this step - no
-   animation yet, that's Step 5. */
+   animate across the 4 columns of a single row - no direction switching
+   yet, that would be a natural next step. */
 #define SPRITE_COLUMNS 4
 #define SPRITE_ROWS 4
+
+/* How many animation frames to show per second while walking. Higher =
+   faster-looking legs/arms. This is separate from SetTargetFPS - that
+   controls how often the whole game updates/draws; this controls how
+   often the sprite's pose changes. */
+#define WALK_FRAMES_PER_SECOND 8.0f
 
 /* ---- Function prototypes ---------------------------------------------- */
 void InitGame(int screenWidth, int screenHeight, const char *title);
@@ -33,8 +41,10 @@ void InitPlayer(Vector2 *pos, float *speed, Texture2D *texture,
                  int *frameWidth, int *frameHeight,
                  int screenWidth, int screenHeight);
 void UpdatePlayer(Vector2 *pos, float speed, int frameWidth, int frameHeight,
-                   int screenWidth, int screenHeight);
-void DrawPlayer(Vector2 pos, Texture2D texture, int frameWidth, int frameHeight);
+                   int screenWidth, int screenHeight,
+                   int *currentFrame, float *frameTimer, bool *isMoving);
+void DrawPlayer(Vector2 pos, Texture2D texture, int frameWidth, int frameHeight,
+                 int currentFrame);
 
 int main(void)
 {
@@ -42,11 +52,11 @@ int main(void)
     const int screenHeight = 540;
 
     /* --- STEP 1: setup -------------------------------------------- */
-    InitGame(screenWidth, screenHeight, "Steps 1-4 - Window, Drawing, Input & Sprites");
+    InitGame(screenWidth, screenHeight, "Steps 1-5 - Window, Drawing, Input & Animated Sprite");
 
     /* --- STEP 3/4: setup ------------------------------------------------
-       InitPlayer now also loads the sprite texture and figures out how
-       big a single frame is - see the function below for why. */
+       InitPlayer loads the sprite texture and figures out how big a
+       single frame is - see the function below for why. */
     Vector2 playerPos;
     float playerSpeed;
     Texture2D playerTexture;
@@ -55,18 +65,27 @@ int main(void)
     InitPlayer(&playerPos, &playerSpeed, &playerTexture,
                &frameWidth, &frameHeight, screenWidth, screenHeight);
 
+    /* --- STEP 5: setup -----------------------------------------------
+       Animation state: which of the 4 frames we're currently showing,
+       and how much time has passed since we last advanced to the next
+       one. Both start at zero/idle. */
+    int currentFrame = 0;
+    float frameTimer = 0.0f;
+    bool isMoving = false;
+
     /* --- STEP 1: the game loop ------------------------------------- */
     while (!WindowShouldClose())
     {
         /* UPDATE */
-        UpdatePlayer(&playerPos, playerSpeed, frameWidth, frameHeight, screenWidth, screenHeight);
+        UpdatePlayer(&playerPos, playerSpeed, frameWidth, frameHeight, screenWidth, screenHeight,
+                     &currentFrame, &frameTimer, &isMoving);
 
         /* DRAW */
         BeginDrawing();
             ClearBackground(RAYWHITE);
 
-            DrawReferenceShapes();                                   /* STEP 2 */
-            DrawPlayer(playerPos, playerTexture, frameWidth, frameHeight); /* STEP 4 */
+            DrawReferenceShapes();                                              /* STEP 2 */
+            DrawPlayer(playerPos, playerTexture, frameWidth, frameHeight, currentFrame); /* STEP 4/5 */
 
         EndDrawing();
     }
@@ -149,26 +168,22 @@ void DrawReferenceShapes(void)
 }
 
 /* =========================================================================
-   STEP 3 + STEP 4: THE PLAYER - INPUT, MOVEMENT & A REAL SPRITE
+   STEP 3 + 4 + 5: THE PLAYER - INPUT, MOVEMENT, SPRITE & ANIMATION
    =========================================================================
    Step 3 gave the player a position and moved it with input. Step 4
-   replaces the placeholder circle with a real sprite cut out of a
-   spritesheet image. Two new ideas:
+   replaced the placeholder circle with a single static frame cut out of
+   a spritesheet. Step 5 (this one) cycles through several frames over
+   time so the sprite looks like it's walking instead of sliding.
 
-   1. Texture2D / LoadTexture(path) - loads an image file from disk onto
-      the GPU as a "texture" you can draw. Must happen AFTER InitWindow.
+   The core animation idea, "frame timer":
+     - Keep a running total of elapsed time (frameTimer).
+     - Every frame, add how long that frame took (GetFrameTime()).
+     - Once the total passes some threshold (1 / frames-per-second),
+       reset it back to zero and move on to the next animation frame.
+     - Wrap back to frame 0 after the last one (modulo `%`).
 
-   2. Source rectangles - our spritesheet has 16 character frames packed
-      into one image (4 columns x 4 rows). To draw just ONE frame, we
-      tell raylib a Rectangle describing where that frame lives INSIDE
-      the texture (its x, y, width, height in pixels), and raylib copies
-      only that region to the screen. DrawTextureRec(texture, sourceRec,
-      position, tint) does exactly this.
-
-   Also note: DrawTextureRec draws from the TOP-LEFT corner of
-   `position` - like DrawRectangle, NOT like DrawCircle's center point
-   from Step 2. So playerPos now means "top-left corner of the sprite",
-   not "center of the circle" like it did in Step 3.
+   This is the same delta-time idea from Step 3's movement, just used to
+   pace animation instead of position.
    ========================================================================= */
 
 void InitPlayer(Vector2 *pos, float *speed, Texture2D *texture,
@@ -186,9 +201,10 @@ void InitPlayer(Vector2 *pos, float *speed, Texture2D *texture,
     *frameWidth = texture->width / SPRITE_COLUMNS;
     *frameHeight = texture->height / SPRITE_ROWS;
 
-    /* Start in the middle of the screen. Since position now means the
-       sprite's top-left corner (see note above), we offset by half the
-       frame size so the sprite is visually centered. */
+    /* Start in the middle of the screen. Position means the sprite's
+       top-left corner (DrawTextureRec draws from there, not the
+       center), so we offset by half the frame size to visually center
+       it. */
     pos->x = (screenWidth / 2.0f) - (*frameWidth / 2.0f);
     pos->y = (screenHeight / 2.0f) - (*frameHeight / 2.0f);
 
@@ -196,44 +212,68 @@ void InitPlayer(Vector2 *pos, float *speed, Texture2D *texture,
 }
 
 void UpdatePlayer(Vector2 *pos, float speed, int frameWidth, int frameHeight,
-                   int screenWidth, int screenHeight)
+                   int screenWidth, int screenHeight,
+                   int *currentFrame, float *frameTimer, bool *isMoving)
 {
     float dt = GetFrameTime();
 
-    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) pos->x += speed * dt;
-    if (IsKeyDown(KEY_LEFT)  || IsKeyDown(KEY_A)) pos->x -= speed * dt;
-    if (IsKeyDown(KEY_DOWN)  || IsKeyDown(KEY_S)) pos->y += speed * dt;
-    if (IsKeyDown(KEY_UP)    || IsKeyDown(KEY_W)) pos->y -= speed * dt;
+    /* --- Step 3: movement, unchanged ----------------------------------- */
+    *isMoving = false;
+    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) { pos->x += speed * dt; *isMoving = true; }
+    if (IsKeyDown(KEY_LEFT)  || IsKeyDown(KEY_A)) { pos->x -= speed * dt; *isMoving = true; }
+    if (IsKeyDown(KEY_DOWN)  || IsKeyDown(KEY_S)) { pos->y += speed * dt; *isMoving = true; }
+    if (IsKeyDown(KEY_UP)    || IsKeyDown(KEY_W)) { pos->y -= speed * dt; *isMoving = true; }
 
-    /* Clamping now uses the full frame size, not a radius, since pos is
-       a top-left corner: the sprite's right edge is pos.x + frameWidth,
-       and it must not go past the screen's right edge. */
     if (pos->x < 0) pos->x = 0;
     if (pos->x > screenWidth - frameWidth) pos->x = (float)(screenWidth - frameWidth);
     if (pos->y < 0) pos->y = 0;
     if (pos->y > screenHeight - frameHeight) pos->y = (float)(screenHeight - frameHeight);
+
+    /* --- Step 5: advance the animation frame ---------------------------- */
+    if (*isMoving)
+    {
+        /* Accumulate time, and every time we cross the "seconds per
+           frame" threshold, move to the next frame and carry over any
+           leftover time (rather than resetting to exactly 0, which
+           would slowly drift out of sync with the real elapsed time). */
+        *frameTimer += dt;
+        float secondsPerFrame = 1.0f / WALK_FRAMES_PER_SECOND;
+        if (*frameTimer >= secondsPerFrame)
+        {
+            *frameTimer -= secondsPerFrame;
+            *currentFrame = (*currentFrame + 1) % SPRITE_COLUMNS;
+        }
+    }
+    else
+    {
+        /* Standing still: show a fixed idle pose (frame 0) instead of
+           whatever frame the walk cycle stopped on. */
+        *currentFrame = 0;
+        *frameTimer = 0.0f;
+    }
 }
 
-void DrawPlayer(Vector2 pos, Texture2D texture, int frameWidth, int frameHeight)
+void DrawPlayer(Vector2 pos, Texture2D texture, int frameWidth, int frameHeight,
+                 int currentFrame)
 {
-    DrawText("Step 4: now a real sprite, still moved with WASD/Arrows", 40, 200, 20, GRAY);
+    DrawText("Step 5: walk - the sprite now animates while moving", 40, 200, 20, GRAY);
 
     /* The source rectangle: which region of the spritesheet to copy.
-       row 0, column 0 -> the very first frame, top-left of the sheet.
-       (x, y, width, height), all in pixels within the texture.) */
-    Rectangle sourceRec = { 0.0f, 0.0f, (float)frameWidth, (float)frameHeight };
+       x shifts across columns (the animation frame), y picks the row
+       (row 0 here - a fixed facing direction for now). */
+    Rectangle sourceRec = { (float)(currentFrame * frameWidth), 0.0f,
+                             (float)frameWidth, (float)frameHeight };
 
     DrawTextureRec(texture, sourceRec, pos, WHITE);
 }
 
 /* -----------------------------------------------------------------------
    TRY IT:
-   - Step 4: change the source rectangle's x in DrawPlayer, e.g.
-     sourceRec.x = (float)frameWidth; - that shifts to the SECOND column
-     (frame 2) of the same row. Try frameWidth * 2 and * 3 too.
-   - Change sourceRec.y = (float)frameHeight; to jump to row 2 (a
-     different facing direction) instead of a different column.
-   - Notice DrawPlayer's tint parameter is WHITE (shows the sprite's own
-     colors unchanged) - try RED or a translucent color and see what
-     happens to the sprite.
+   - Change WALK_FRAMES_PER_SECOND to 2 (slow, sluggish) or 16 (fast,
+     twitchy) and see how it changes the feel of the walk.
+   - In DrawPlayer, hardcode sourceRec.y to frameHeight (row 1) or
+     frameHeight * 2 (row 2) to preview a different row of the sheet.
+   - Natural next step (not included here): pick the row based on which
+     direction key is held, so the sprite actually faces the direction
+     it's moving instead of always using row 0.
    ----------------------------------------------------------------------- */
