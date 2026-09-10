@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(RaylibGame C)
+project(RaylibTutorial C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -12,25 +12,15 @@ FetchContent_Declare(
     GIT_TAG 5.5
     GIT_SHALLOW TRUE
 )
-
-# Don't build raylib's examples/games, just the library
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
-
 FetchContent_MakeAvailable(raylib)
 
-# --- Your game ---
-file(GLOB SOURCES "src/*.c")
-add_executable(${PROJECT_NAME} ${SOURCES})
-
+add_executable(${PROJECT_NAME} src/main.c)
 target_link_libraries(${PROJECT_NAME} PRIVATE raylib)
 
-# Copy assets folder next to the exe after build (optional, safe if empty)
+# Copy assets folder next to the exe after build
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:${PROJECT_NAME}>/assets
 )
-
-if (WIN32)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE NOMINMAX)
-endif()
