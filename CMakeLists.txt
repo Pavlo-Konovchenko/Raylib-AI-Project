@@ -16,7 +16,12 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(raylib)
 
-add_executable(${PROJECT_NAME} src/main.c)
+add_executable(${PROJECT_NAME}
+    src/main.c
+    src/game.c
+    src/shapes.c
+    src/player.c
+)
 target_link_libraries(${PROJECT_NAME} PRIVATE raylib)
 
 # Copy assets folder next to the exe after build
